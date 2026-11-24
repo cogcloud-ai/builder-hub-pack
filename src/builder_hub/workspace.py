@@ -37,7 +37,9 @@ def execution_policy():
     if not path.is_file():
         return None
     value = json.loads(path.read_text())
-    if value.get('qualified') is not True or value.get('mode') != 'docker' or not re.fullmatch(r'sha256:[a-f0-9]{64}', value.get('image', '')):
+    if isinstance(value, dict) and value.get('qualified') is False:
+        return None
+    if not isinstance(value, dict) or value.get('qualified') is not True or value.get('mode') != 'docker' or not re.fullmatch(r'sha256:[a-f0-9]{64}', value.get('image', '')):
         raise ValueError('Execution qualification is missing or invalid.')
     return {'mode': 'docker', 'image': value['image'], 'timeout_seconds': 60, 'output_bytes': 1048576}
 
@@ -69,13 +71,18 @@ def initialize(workspace: Path):
                 raise ValueError('Execution policy is configured by the deployment.')
             if request.get('reference'):
                 raise ValueError('Reference packages are not enabled in this hosted preview.')
-            if not isinstance(request.get('max_attempts'), int) or not 1 <= request['max_attempts'] <= 5:
+            if type(request.get('max_attempts')) is not int or not 1 <= request['max_attempts'] <= 5:
                 raise ValueError('Choose between one and five rounds.')
-            if not isinstance(request.get('max_cost_units'), int) or not 0 <= request['max_cost_units'] <= 30:
+            if type(request.get('max_cost_units')) is not int or not 0 <= request['max_cost_units'] <= 30:
                 raise ValueError('Choose a model turn budget between zero and thirty.')
             policy = execution_policy()
             if policy:
                 request['execution_policy'] = policy
+            else:
+                # A missing qualified image must never select upstream's
+                # trusted-local compatibility default, even if resumed elsewhere.
+                request['execution_policy'] = {'mode': 'docker', 'image': 'sha256:' + '0' * 64,
+                                               'timeout_seconds': 60, 'output_bytes': 1048576}
             return super().start_builder(request, binding)
 
         def resume_builder(self, ident, decision=None):
@@ -94,7 +101,7 @@ def initialize(workspace: Path):
 
         def package(self, request, envelope, destination):
             root = self.root(destination)
-            if root.parent != self.workspace or not re.fullmatch(r'cog-[a-z0-9]+(?:-[a-z0-9]+)*', root.name):
+            if root.parent != self.workspace or root.name in self.trusted_packages or not re.fullmatch(r'cog-[a-z0-9]+(?:-[a-z0-9]+)*', root.name):
                 raise ValueError('New packages must be direct workspace children with a Cog name.')
             return super().package(request, envelope, destination)
 
@@ -127,6 +134,13 @@ def permitted(body, suite):
         raise ValueError('Only the designer, author and evaluator may be invoked.')
     if action == 'bind' and suite.relative(body.get('provider', '')) not in PROVIDERS:
         raise ValueError('Unsupported hosted provider.')
+    if action == 'bind':
+        request = body.get('request', {})
+        if not isinstance(request, dict) or not isinstance(request.get('configuration'), dict) or not isinstance(request.get('requirement'), dict):
+            raise ValueError('Invalid hosted binding request.')
+        if (request.get('configuration', {}).get('model_id') != 'sonnet' or
+                request.get('requirement', {}).get('model_id') != 'sonnet'):
+            raise ValueError('This deployment admits the configured Claude sonnet selector only.')
     if action == 'verify' and body.get('operation') != 'check':
         raise ValueError(POLICY_MESSAGE)
     if action in {'gateway', 'evaluate'}:
@@ -180,6 +194,7 @@ class WorkspaceServer(ThreadingHTTPServer):
 
 class WorkspaceHandler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
+    timeout = 15
 
     def log_message(self, *args):
         # Request bodies, cookies, query strings and provider results aren't logs.
@@ -199,7 +214,7 @@ class WorkspaceHandler(BaseHTTPRequestHandler):
 
     def authorized(self):
         headers = self.headers.get_all('Authorization', [])
-        return len(headers) == 1 and hmac.compare_digest(headers[0], 'Bearer ' + self.server.token)
+        return len(headers) == 1 and hmac.compare_digest(headers[0].encode(), ('Bearer ' + self.server.token).encode())
 
     def do_GET(self):
         parsed = urllib.parse.urlsplit(self.path)
@@ -304,6 +319,12 @@ hostedControls();
                     self.server.busy.release()
                 with self.server.surface.LOCK:
                     self.server.surface.JOBS[ident] = state
+                    while len(self.server.surface.JOBS) > 200:
+                        old = next((key for key, value in self.server.surface.JOBS.items()
+                                    if key != ident and value['status'] != 'working'), None)
+                        if old is None:
+                            break
+                        del self.server.surface.JOBS[old]
             self.server.executor.submit(work)
             return self._send(202, {'job': ident})
         except (ValueError, TypeError, KeyError):
@@ -316,7 +337,8 @@ def main():
     parser.add_argument('--workspace', type=Path, default=Path('/opt/builder-suite'))
     parser.add_argument('--port', type=int, default=8443)
     args = parser.parse_args()
-    token = os.environ.get('BUILDER_WORKSPACE_TOKEN', '')
+    token_file = os.environ.get('BUILDER_WORKSPACE_TOKEN_FILE')
+    token = Path(token_file).read_text().strip() if token_file else os.environ.get('BUILDER_WORKSPACE_TOKEN', '')
     if len(token) < 32:
         parser.error('A private workspace service token of at least 32 characters is required.')
     _journal_path = args.workspace / 'cog-workbench/var/hosted-activity.jsonl'
@@ -325,7 +347,7 @@ def main():
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(os.environ['BUILDER_TLS_CERT'], os.environ['BUILDER_TLS_KEY'])
-    server.socket = context.wrap_socket(server.socket, server_side=True)
+    server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
     server.serve_forever()
 
 

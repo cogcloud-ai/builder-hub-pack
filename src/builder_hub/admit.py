@@ -13,12 +13,19 @@ def main():
     suite_type, _ = initialize(args.workspace)
     suite = suite_type()
     ref = {'binding_id': 'hosted-claude', 'revision': 1}
-    if suite.path(ref).exists():
-        suite.load(ref)
-        print('Existing hosted Claude binding is still admitted.')
-        return
+    while suite.path(ref).exists():
+        try:
+            entry = suite.load(ref)
+        except ValueError:
+            ref['revision'] += 1
+            continue
+        if entry['binding']['model']['id'] == args.model:
+            print('Existing hosted Claude binding is still admitted for ' + args.model + '.')
+            return
+        ref['revision'] += 1
     request = json.loads((args.workspace / 'cog-claude/examples/bind-request.json').read_text())
     request['binding_id'] = ref['binding_id']
+    request['revision'] = ref['revision']
     request['configuration']['model_id'] = args.model
     request['requirement']['model_id'] = args.model
     result = suite.bind('cog-claude', request)

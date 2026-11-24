@@ -38,7 +38,7 @@ import os
 import re
 import ssl
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
@@ -537,6 +537,24 @@ def rewrite_studio_html(html: str) -> str:
     return OWNER_BANNER + html
 
 
+def install_navigation(home_module, owner_sub: str) -> None:
+    """Add an owner-only Builder link through the pinned Hub's chrome data.
+
+    No Hub HTML, scripts or authentication behavior are copied. This small
+    integration seam is qualified against the exact Hub revision in sources.
+    """
+    original = home_module._chrome
+
+    def chrome(surface, session, root_path, back_path):
+        result = original(surface, session, root_path, back_path)
+        if session is not None and session.user == owner_sub:
+            result = replace(result, nav=result.nav +
+                             '<a href="' + result.root + '/builder/studio">Builder Studio</a>')
+        return result
+
+    home_module._chrome = chrome
+
+
 async def _refuse_body(scope: Scope) -> None:
     length = _header(scope, b"content-length")
     if _header(scope, b"transfer-encoding") is not None or (length is not None and length.strip() != "0"):
@@ -583,6 +601,8 @@ def main() -> None:  # pragma: no cover - exercised in deployment
 
     config = Config.parse()
     configure_logging(config.observability.logging)
+    from collab_hub_api.web import home
+    install_navigation(home, builder_config.owner_sub)
     hub = make_app(config)
     if getattr(hub.state, "web_surface", None) is None:
         raise SystemExit("Builder requires the Hub web surface (web.enabled) for session checks")

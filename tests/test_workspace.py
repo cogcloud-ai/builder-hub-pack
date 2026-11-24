@@ -86,3 +86,23 @@ def test_execution_has_no_ambient_fallback(tmp_path, monkeypatch):
                                  'timeout_seconds': 6000}))
     assert ws.execution_policy() == {'mode': 'docker', 'image': 'sha256:' + 'a' * 64,
                                      'timeout_seconds': 60, 'output_bytes': 1048576}
+
+
+def test_idle_connection_does_not_block_workspace_tls(tmp_path, monkeypatch):
+    import socket
+    import ssl
+    from test_host_bridge import _generate_self_signed_tls
+    cert, key = _generate_self_signed_tls(tmp_path)
+    monkeypatch.setattr(ws, 'initialize', lambda path: (FakeSuite, SimpleNamespace()))
+    server = ws.WorkspaceServer(('127.0.0.1', 0), tmp_path, 'x' * 48)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    try:
+        with socket.create_connection(('127.0.0.1', server.server_port), timeout=2):
+            verify = ssl.create_default_context(cafile=str(cert))
+            with httpx.Client(verify=verify, trust_env=False, timeout=2) as client:
+                assert client.get('https://127.0.0.1:' + str(server.server_port) + '/health').status_code == 200
+    finally:
+        server.shutdown(); server.server_close(); thread.join()

@@ -78,7 +78,7 @@ def main():
     parser.add_argument('--hub-source', required=True, type=Path)
     parser.add_argument('--image', required=True)
     parser.add_argument('--username', default='trent')
-    parser.add_argument('--host-address', default='172.30.0.1')
+    parser.add_argument('--host-address', default='172.30.0.20')
     args = parser.parse_args()
     if not os.environ.get('KUBECONFIG'):
         parser.error('Set KUBECONFIG to the intended private test cluster.')
@@ -114,19 +114,18 @@ def main():
                                'seccompProfile': {'type': 'RuntimeDefault'}},
            'initContainers': [{'name': 'workspace', 'image': args.image, 'imagePullPolicy': 'Never',
                'command': ['python', '-m', 'builder_hub.initialize'],
-               'env': [{'name': 'BUILDER_OWNER_SUB', 'value': owner_sub}],
+               'env': [{'name': 'BUILDER_OWNER_SUB', 'value': owner_sub},
+                       {'name': 'BUILDER_REFRESH_TRUSTED', 'value': 'true'}],
                'securityContext': security,
                'volumeMounts': [{'name': 'workspace', 'mountPath': '/workspace'},
                                 {'name': 'tmp', 'mountPath': '/tmp'}],
                'resources': {'requests': {'cpu': '100m', 'memory': '128Mi'},
                              'limits': {'cpu': '1', 'memory': '512Mi'}}}],
            'containers': [{'name': 'studio', 'image': args.image, 'imagePullPolicy': 'Never',
-               'command': ['/opt/builder-suite/cog-workbench/.pixi/envs/default/bin/python',
-                           '-m', 'builder_hub.workspace'],
+               'command': ['python', '-m', 'builder_hub.entrypoint'],
                'securityContext': security,
                'ports': [{'name': 'https', 'containerPort': 8443}],
-               'env': [{'name': 'BUILDER_WORKSPACE_TOKEN', 'valueFrom': {'secretKeyRef': {
-                           'name': 'builder-preview-channel', 'key': 'workspace-token'}}},
+               'env': [{'name': 'BUILDER_WORKSPACE_TOKEN_FILE', 'value': '/etc/builder-channel/token'},
                        {'name': 'BUILDER_TLS_CERT', 'value': '/etc/builder-tls/tls.crt'},
                        {'name': 'BUILDER_TLS_KEY', 'value': '/etc/builder-tls/tls.key'},
                        {'name': 'HOME', 'value': '/tmp/builder-home'},
@@ -135,6 +134,8 @@ def main():
                'volumeMounts': [{'name': 'workspace', 'mountPath': '/opt/builder-suite'},
                                 {'name': 'tls', 'mountPath': '/etc/builder-tls', 'readOnly': True},
                                 {'name': 'host-client', 'mountPath': '/etc/builder-host', 'readOnly': True},
+                                {'name': 'channel', 'mountPath': '/etc/builder-channel', 'readOnly': True},
+                                {'name': 'execution', 'mountPath': '/etc/builder-execution', 'readOnly': True},
                                 {'name': 'tmp', 'mountPath': '/tmp'}],
                'readinessProbe': {'httpGet': {'path': '/health', 'port': 8443, 'scheme': 'HTTPS'},
                                   'initialDelaySeconds': 5},
@@ -143,6 +144,9 @@ def main():
            'volumes': [{'name': 'workspace', 'persistentVolumeClaim': {'claimName': 'builder-workspace'}},
                        {'name': 'tls', 'secret': {'secretName': 'builder-workspace-tls', 'defaultMode': 0o440}},
                        {'name': 'host-client', 'secret': {'secretName': 'builder-host-client', 'defaultMode': 0o440}},
+                       {'name': 'channel', 'secret': {'secretName': 'builder-preview-channel', 'defaultMode': 0o440,
+                            'items': [{'key': 'workspace-token', 'path': 'token'}]}},
+                       {'name': 'execution', 'configMap': {'name': 'builder-execution', 'optional': True}},
                        {'name': 'tmp', 'emptyDir': {'sizeLimit': '1Gi'}}]}
     apply('Deployment', 'builder-workspace', {'replicas': 1, 'strategy': {'type': 'Recreate'},
         'selector': {'matchLabels': {'app': 'builder-workspace'}},
