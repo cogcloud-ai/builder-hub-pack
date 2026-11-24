@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "suite": {
+    "url": "https://github.com/cogcloud-ai/cog-op-builder.git",
+    "revision": "d6beeba96ffb0767e0f3574a676c94267ee30ba1"
+  },
+  "hub": {
+    "url": "https://github.com/openteams-ai/collab-hub-pack.git",
+    "revision": "eab8189a5d476a8c9debbe23c8db173793d31746"
+  },
+  "basePack": {
+    "url": "https://github.com/cogcloud-ai/cog-op-builder.git",
+    "revision": "3ac1e6a39685420c3dc96293b927c55f19c549b6"
+  }
+}
