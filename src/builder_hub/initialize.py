@@ -7,6 +7,36 @@ import shutil
 from .trust import INVENTORY, checksum, verify, RUNTIME_DIRECTORIES, RUNTIME_FILES
 
 
+def restore_task_caches(source, destination, trusted_files):
+    """Discard mutable Pixi scheduling records and restore the image's copies.
+
+    Native model tasks create these JSON records even without cached outputs.
+    They must not become trusted persistent execution inputs. Keep the complete
+    inventory check: normalize only this disposable cache from immutable source.
+    """
+    packages = {name.split('/', 1)[0] for name in trusted_files}
+    caches = {name + '/.pixi/task-cache-v0' for name in packages}
+    for name in trusted_files:
+        prefix, separator, _ = name.partition('/.pixi/task-cache-v0/')
+        if separator:
+            caches.add(prefix + '/.pixi/task-cache-v0')
+    for relative in sorted(caches):
+        original, target = source / relative, destination / relative
+        parent = destination
+        for part in Path(relative).parts:
+            parent = parent / part
+            if parent.is_symlink():
+                raise ValueError('Pixi task cache paths must not contain symlinks.')
+        if target.exists():
+            if not target.is_dir():
+                raise ValueError('Pixi task caches must be directories.')
+            shutil.rmtree(target)
+        if original.exists():
+            if original.is_symlink() or not original.is_dir():
+                raise ValueError('Immutable Pixi task cache must be a real directory.')
+            shutil.copytree(original, target, symlinks=True)
+
+
 def initialize(source, destination, owner, sources=None, trusted_files=None, refresh=False):
     source, destination = Path(source), Path(destination)
     if not owner:
@@ -67,6 +97,7 @@ def initialize(source, destination, owner, sources=None, trusted_files=None, ref
             else:
                 shutil.copy2(child, target, follow_symlinks=False)
     if trusted_files is not None:
+        restore_task_caches(source, destination, trusted_files)
         verify(destination, trusted_files)
         expected['suite_tree_sha256'] = expected_tree
     marker.write_text(json.dumps(expected, indent=2) + '\n')

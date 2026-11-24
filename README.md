@@ -23,6 +23,9 @@ installed environment file against an inventory from the immutable image. An
 explicit image refresh preserves runtime state; owner/source changes require
 migration. Runtime environment installation and arbitrary Workbench filesystem
 or process endpoints are unavailable.
+Startup restores disposable Pixi task-cache records from the immutable image
+before checking the complete inventory. Native model turns update these records;
+build cycles, candidates, bindings and evidence remain persistent.
 
 A restricted HTTPS provider bridge uses the native Claude subscription login
 in its vendor-owned store. A separate verifier bridge receives Docker authority;

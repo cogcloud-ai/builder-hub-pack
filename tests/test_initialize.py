@@ -90,3 +90,46 @@ def test_initialization_does_not_follow_package_or_runtime_symlinks(tmp_path):
     with pytest.raises(ValueError):
         initialize(source, destination, 'owner', {})
     assert not list(outside.iterdir())
+
+
+def test_restart_restores_pixi_task_cache_without_losing_builds(tmp_path):
+    from builder_hub.trust import inventory
+    source = tmp_path / 'source'; destination = tmp_path / 'destination'
+    source.mkdir(); destination.mkdir()
+    package = source / 'cog-op-builder'; package.mkdir()
+    (package / 'repositories.json').write_text('{"repositories":[]}')
+    (package / 'source.py').write_text('trusted')
+    cache = package / '.pixi/task-cache-v0'; cache.mkdir(parents=True)
+    (cache / 'image.json').write_text('immutable scheduling record')
+    expected = inventory(source)
+    initialize(source, destination, 'owner', {}, expected)
+    saved = destination / 'cog-op-builder/cycles'; saved.mkdir()
+    (saved / 'completed.json').write_text('retained build')
+    live_cache = destination / 'cog-op-builder/.pixi/task-cache-v0'
+    (live_cache / 'image.json').write_text('changed scheduling record')
+    (live_cache / 'new-live-turn.json').write_text('new scheduling record')
+    initialize(source, destination, 'owner', {}, expected)
+    assert (live_cache / 'image.json').read_text() == 'immutable scheduling record'
+    assert not (live_cache / 'new-live-turn.json').exists()
+    assert (saved / 'completed.json').read_text() == 'retained build'
+    (destination / 'cog-op-builder/source.py').write_text('tampered')
+    with pytest.raises(ValueError):
+        initialize(source, destination, 'owner', {}, expected)
+
+
+@pytest.mark.parametrize('link_parent', [True, False])
+def test_task_cache_restore_refuses_symlink_escape(tmp_path, link_parent):
+    from builder_hub.initialize import restore_task_caches
+    source = tmp_path / 'source'; source.mkdir()
+    destination = tmp_path / 'destination'; destination.mkdir()
+    package = destination / 'cog-op-builder'; package.mkdir()
+    outside = tmp_path / 'outside'; outside.mkdir()
+    (outside / 'retained').write_text('untouched')
+    if link_parent:
+        (package / '.pixi').symlink_to(outside, target_is_directory=True)
+    else:
+        (package / '.pixi').mkdir()
+        (package / '.pixi/task-cache-v0').symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError):
+        restore_task_caches(source, destination, {'cog-op-builder/source.py': {}})
+    assert (outside / 'retained').read_text() == 'untouched'
