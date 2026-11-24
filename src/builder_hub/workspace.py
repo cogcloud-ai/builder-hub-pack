@@ -92,6 +92,12 @@ def initialize(workspace: Path):
                 raise ValueError(POLICY_MESSAGE)
             return super().verify(root, operation)
 
+        def package(self, request, envelope, destination):
+            root = self.root(destination)
+            if root.parent != self.workspace or not re.fullmatch(r'cog-[a-z0-9]+(?:-[a-z0-9]+)*', root.name):
+                raise ValueError('New packages must be direct workspace children with a Cog name.')
+            return super().package(request, envelope, destination)
+
         def evaluate(self, *args, **kwargs):
             raise ValueError(POLICY_MESSAGE)
 
