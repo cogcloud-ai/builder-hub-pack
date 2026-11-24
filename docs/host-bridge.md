@@ -108,7 +108,8 @@ parses only the exact invocations emitted by public
 (`cog-verify-candidate/tests/test_isolation.py`):
 
 1. `docker image inspect --format '{{.Id}} {{.Os}} {{.Architecture}}' <image>`
-   - Host ignores the requested image and inspects `BUILDER_VERIFY_IMAGE`
+   - Host requires the requested digest to match `BUILDER_VERIFY_IMAGE`, then
+     inspects only that configured immutable image
      (`sha256:<64hex>`).
    - Host verifies output matches `^sha256:[a-f0-9]{64} linux [A-Za-z0-9_.-]+$`
      and fails closed otherwise.
@@ -117,7 +118,8 @@ parses only the exact invocations emitted by public
    readonly `/candidate` mount, optional readonly `/inputs/<N>` mounts,
    `--entrypoint python`, pinned image digest, and declared Python arguments.
    - Workspace shim confines file collection to subdirectories/files strictly
-     inside `workspace_root` (default `/opt/builder-suite`) and `/tmp`. It
+     inside `workspace_root` (default `/opt/builder-suite`). Native verification
+     copies temporary inputs into workspace state before invoking Docker. It
      rejects symlinks, `.git`, `.pixi`, special files, parent traversal, and
      inputs exceeding `8 MiB` total.
    - Protocol uses an explicit relative regular-file map (`candidate_files`,

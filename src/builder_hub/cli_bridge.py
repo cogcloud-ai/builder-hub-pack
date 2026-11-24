@@ -519,7 +519,9 @@ def build_docker_bridge_payload(args: list[str], config: ClientConfig) -> tuple[
             if len(arg) > MAX_PYTHON_ARG_LEN or "\x00" in arg or arg in FORBIDDEN_SHELL_TOKENS:
                 raise CliBridgeError("Invalid Python argument for docker run.")
 
-        allowed_roots = _allowed_roots(config)
+        # Native ExecutionSuite copies all candidate/input mounts beneath its
+        # workspace state directory. Docker needs no ambient /tmp access.
+        allowed_roots = (config.workspace_root.resolve(),)
         candidate_files, used_bytes = collect_candidate_files(
             candidate_src,
             allowed_roots,

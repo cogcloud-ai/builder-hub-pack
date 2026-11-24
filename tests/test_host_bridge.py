@@ -1264,7 +1264,7 @@ def test_http_redirect_refused_never_leaks_token(tmp_path: Path):
         t.join(timeout=3)
 
 
-def test_tmp_root_allowed_for_subdirs_but_not_root_itself_or_escape(https_bridge):
+def test_docker_mounts_require_workspace_even_for_temporary_subdirs(https_bridge):
     env = {"BUILDER_HOST_CONFIG": str(https_bridge["client_cfg_path"])}
 
     # Mounting workspace_root itself or /tmp itself must be rejected.
@@ -1276,7 +1276,7 @@ def test_tmp_root_allowed_for_subdirs_but_not_root_itself_or_escape(https_bridge
         out, err = io.BytesIO(), io.BytesIO()
         assert cli_bridge.main(["docker", *args], environ=env, stdout_stream=out, stderr_stream=err) == 2
 
-    # Subdirectory inside /tmp is allowed.
+    # Docker inputs must be copied into workspace state by native ExecutionSuite.
     sub_tmp = Path("/tmp") / f"builder-bridge-test-{uuid.uuid4().hex}"
     sub_tmp.mkdir(mode=0o700)
     try:
@@ -1288,7 +1288,7 @@ def test_tmp_root_allowed_for_subdirs_but_not_root_itself_or_escape(https_bridge
         )
         out, err = io.BytesIO(), io.BytesIO()
         rc = cli_bridge.main(["docker", *args], environ=env, stdout_stream=out, stderr_stream=err)
-        assert rc == 0, err.getvalue().decode()
+        assert rc == 2
     finally:
         import shutil
         shutil.rmtree(sub_tmp, ignore_errors=True)
