@@ -20,20 +20,18 @@ def initialize(source, destination, owner, sources=None, trusted_files=None, ref
     expected_tree = checksum(trusted_files) if trusted_files is not None else None
     needs_copy = not marker.exists()
     if marker.exists():
+        if marker.is_symlink():
+            raise ValueError('Workspace owner marker must not be a symlink.')
         previous = json.loads(marker.read_text())
-        if marker.is_symlink() or {key: previous.get(key) for key in expected} != expected:
+        if {key: previous.get(key) for key in expected} != expected:
             raise ValueError('Workspace owner or source pins differ; explicit migration is required.')
         if trusted_files is not None:
             if previous.get('suite_tree_sha256') not in (None, expected_tree):
                 if not refresh:
                     raise ValueError('Execution image changed; use an explicit trusted-source refresh.')
                 needs_copy = True
-            elif previous.get('suite_tree_sha256') is None:
-                # Adoption of the initial preview is allowed only when every
-                # execution file already matches the image.
-                verify(destination, trusted_files)
-            else:
-                verify(destination, trusted_files)
+            # The final verification below also covers adopting the first
+            # preview marker, and runs before the new inventory is recorded.
     else:
         if pending.exists():
             if pending.is_symlink() or json.loads(pending.read_text()) != expected:
@@ -48,12 +46,16 @@ def initialize(source, destination, owner, sources=None, trusted_files=None, ref
         # trying to chmod that root to match the image's directory metadata.
         for child in source.iterdir():
             target = destination / child.name
+            if target.is_symlink():
+                raise ValueError('Trusted package targets must not be symlinks.')
             if child.is_dir() and not child.is_symlink():
-                if target.exists() and marker.exists():
+                if target.exists():
                     # Preserve only declared runtime state on an explicit image
                     # refresh. Source and environments are replaced together.
                     for existing in target.iterdir():
                         if existing.name in RUNTIME_DIRECTORIES | RUNTIME_FILES:
+                            if existing.is_symlink():
+                                raise ValueError('Preserved runtime state must not be a symlink.')
                             continue
                         if existing.is_dir() and not existing.is_symlink():
                             shutil.rmtree(existing)

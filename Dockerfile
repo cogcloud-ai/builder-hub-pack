@@ -12,5 +12,6 @@ RUN python -c 'import sysconfig; from pathlib import Path; Path(sysconfig.get_pa
     && chmod 755 /usr/local/bin/claude /usr/local/bin/docker \
     && python -m builder_hub.trust
 USER 1000:1000
+ENV PYTHONDONTWRITEBYTECODE=1
 ENTRYPOINT ["/bin/bash"]
 CMD ["-c", "python -m builder_hub.hub_extension"]

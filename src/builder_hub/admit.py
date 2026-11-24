@@ -1,15 +1,21 @@
 """Admit the existing host-owned Claude subscription through the fixed bridge."""
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 from .workspace import initialize
+from .trust import verify
 
 
 def main():
+    os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+    sys.dont_write_bytecode = True
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--workspace', type=Path, default=Path('/opt/builder-suite'))
     parser.add_argument('--model', default='sonnet')
     args = parser.parse_args()
+    verify(args.workspace)
     suite_type, _ = initialize(args.workspace)
     suite = suite_type()
     ref = {'binding_id': 'hosted-claude', 'revision': 1}

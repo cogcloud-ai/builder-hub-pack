@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run the restricted host bridge on the private kind Docker network.
 
-Only this trusted bridge receives the native vendor store and Docker authority.
-Studio and generated verification containers receive neither. Existing vendor
+Separate trusted containers receive the native vendor store and Docker authority.
+The Claude process has no Docker socket or Docker group. Existing vendor
 files are bind-mounted in place, never copied into Kubernetes or this repository.
 """
 import argparse
@@ -27,6 +27,7 @@ def main():
     parser.add_argument('--directory', type=Path, required=True)
     parser.add_argument('--claude', type=Path, default=Path.home() / '.local/bin/claude')
     parser.add_argument('--address', default='172.30.0.20')
+    parser.add_argument('--verify-address', default='172.30.0.21')
     args = parser.parse_args()
     if not os.environ.get('KUBECONFIG'):
         parser.error('Set the dedicated test KUBECONFIG.')
@@ -38,25 +39,7 @@ def main():
     directory.chmod(0o700)
     private = directory / 'private'; private.mkdir(exist_ok=True, mode=0o700)
     staging = directory / 'staging'; staging.mkdir(exist_ok=True, mode=0o700)
-    tls = kube_secret('builder-host-tls')
-    for key in ('tls.crt', 'tls.key'):
-        path = private / key
-        path.write_bytes(tls[key]); path.chmod(0o600)
-    token = kube_secret('builder-preview-channel')['host-token'].decode()
-    environment = {
-        'BUILDER_HOST_TOKEN': token, 'BUILDER_HOST_BIND': '0.0.0.0',
-        'BUILDER_HOST_PORT': '9443', 'BUILDER_HOST_TLS_CERT': str(private / 'tls.crt'),
-        'BUILDER_HOST_TLS_KEY': str(private / 'tls.key'),
-        'BUILDER_CLAUDE_CLI': '/opt/vendor/claude',
-        'BUILDER_DOCKER_CLI': '/opt/vendor/docker',
-        'BUILDER_VERIFY_IMAGE': args.verify_image, 'BUILDER_STAGING_ROOT': str(staging),
-        'HOME': '/home/nonroot', 'CLAUDE_CONFIG_DIR': '/home/nonroot/.claude',
-    }
-    env_file = private / 'host.env'
-    if any('\n' in value or '\r' in value for value in environment.values()):
-        parser.error('Environment values may not contain newlines.')
-    env_file.write_text(''.join(key + '=' + value + '\n' for key, value in environment.items()))
-    env_file.chmod(0o600)
+    tokens = kube_secret('builder-preview-channel')
     docker = Path('/usr/bin/docker')
     if not docker.is_file():
         parser.error('Install the host Docker CLI at /usr/bin/docker.')
@@ -68,26 +51,53 @@ def main():
     existing = subprocess.run(['docker', 'inspect', 'builder-host-services'], capture_output=True)
     if existing.returncode == 0:
         subprocess.run(['docker', 'rm', '-f', 'builder-host-services'], check=True, stdout=subprocess.DEVNULL)
-    mounts = [(private, private, True), (staging, staging, False),
-              (args.claude.resolve(), Path('/opt/vendor/claude'), True),
-              (docker, Path('/opt/vendor/docker'), True),
-              (Path('/var/run/docker.sock'), Path('/var/run/docker.sock'), False),
-              (vendor, Path('/home/nonroot/.claude'), False),
-              (config, Path('/home/nonroot/.claude.json'), False)]
-    command = ['docker', 'run', '-d', '--name', 'builder-host-services', '--restart', 'unless-stopped',
-               '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-               '--user', str(os.getuid()) + ':' + str(os.getgid()),
-               '--group-add', str(Path('/var/run/docker.sock').stat().st_gid),
-               '--network', 'kind', '--ip', args.address, '--cpus', '1.5', '--memory', '1g',
-               '--pids-limit', '128', '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m,mode=1777',
-               '--env-file', str(env_file)]
-    for source, destination, readonly in mounts:
-        if ',' in str(source) or ',' in str(destination):
-            parser.error('Mount paths may not contain commas.')
-        command.extend(['--mount', 'type=bind,src=' + str(source) + ',dst=' + str(destination) + (',readonly' if readonly else '')])
-    command.extend(['--entrypoint', 'python', image, '-m', 'builder_hub.host_bridge', 'serve'])
-    subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
-    print('Restricted host bridge started on the private kind network.')
+    for role, address, token_key in [('claude', args.address, 'host-token'),
+                                     ('verify', args.verify_address, 'docker-token')]:
+        role_private = private / role; role_private.mkdir(exist_ok=True, mode=0o700)
+        tls = kube_secret('builder-host-tls' if role == 'claude' else 'builder-verify-tls')
+        for key in ('tls.crt', 'tls.key'):
+            path = role_private / key
+            path.write_bytes(tls[key]); path.chmod(0o600)
+        environment = {
+            'BUILDER_HOST_TOKEN': tokens[token_key].decode(), 'BUILDER_HOST_BIND': '0.0.0.0',
+            'BUILDER_HOST_PORT': '9443', 'BUILDER_HOST_TLS_CERT': str(role_private / 'tls.crt'),
+            'BUILDER_HOST_TLS_KEY': str(role_private / 'tls.key'), 'HOME': '/home/nonroot',
+        }
+        mounts = [(role_private, role_private, True)]
+        if role == 'claude':
+            environment.update(BUILDER_CLAUDE_CLI='/opt/vendor/claude',
+                               CLAUDE_CONFIG_DIR='/home/nonroot/.claude')
+            mounts.extend([(args.claude.resolve(), Path('/opt/vendor/claude'), True),
+                           (vendor, Path('/home/nonroot/.claude'), False),
+                           (config, Path('/home/nonroot/.claude.json'), False)])
+        else:
+            environment.update(BUILDER_DOCKER_CLI='/opt/vendor/docker',
+                               BUILDER_VERIFY_IMAGE=args.verify_image, BUILDER_STAGING_ROOT=str(staging))
+            mounts.extend([(staging, staging, False), (docker, Path('/opt/vendor/docker'), True),
+                           (Path('/var/run/docker.sock'), Path('/var/run/docker.sock'), False)])
+        if any('\n' in value or '\r' in value for value in environment.values()):
+            parser.error('Environment values may not contain newlines.')
+        env_file = role_private / 'host.env'
+        env_file.write_text(''.join(key + '=' + value + '\n' for key, value in environment.items()))
+        env_file.chmod(0o600)
+        name = 'builder-' + role + '-service'
+        if subprocess.run(['docker', 'inspect', name], capture_output=True).returncode == 0:
+            subprocess.run(['docker', 'rm', '-f', name], check=True, stdout=subprocess.DEVNULL)
+        command = ['docker', 'run', '-d', '--name', name, '--restart', 'unless-stopped',
+                   '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+                   '--user', str(os.getuid()) + ':' + str(os.getgid()),
+                   '--network', 'kind', '--ip', address, '--cpus', '1.5', '--memory', '1g',
+                   '--pids-limit', '128', '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m,mode=1777',
+                   '--env-file', str(env_file)]
+        if role == 'verify':
+            command.extend(['--group-add', str(Path('/var/run/docker.sock').stat().st_gid)])
+        for source, destination, readonly in mounts:
+            if ',' in str(source) or ',' in str(destination):
+                parser.error('Mount paths may not contain commas.')
+            command.extend(['--mount', 'type=bind,src=' + str(source) + ',dst=' + str(destination) + (',readonly' if readonly else '')])
+        command.extend(['--entrypoint', 'python', image, '-m', 'builder_hub.host_bridge', 'serve'])
+        subprocess.run(command, check=True, stdout=subprocess.DEVNULL)
+    print('Separate Claude and verifier bridges started on the private kind network.')
 
 
 if __name__ == '__main__':

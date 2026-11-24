@@ -42,12 +42,15 @@ ENV = {
     "BUILDER_WORKSPACE_URL": "http://127.0.0.1:8765",
     "BUILDER_WORKSPACE_TOKEN": TOKEN,
 }
-STUDIO_HTML = (
+STUDIO_TEMPLATE = (
     "<!doctype html><html><title>Studio</title><style>a{}</style>"
     "<header><strong>Cog Workbench</strong><a href=\"/\">Inspect</a></header><main>"
     "<script>const token='__T__';fetch('/api/suite/action');fetch(\"/api/suite/catalog\");"
     "getBuild('/api/suite/build?id='+x);const other='/api/other';</script></main>"
 )
+STUDIO_HTML = STUDIO_TEMPLATE.replace('</title>', '</title>' +
+    '<meta name="cog-workbench-token" content="' + WB + '">' +
+    '<meta name="builder-execution-qualified" content="false">')
 
 
 @dataclass
@@ -114,7 +117,8 @@ def setup():
         return sessions.get(value)
 
     app = BuilderHubExtension(
-        hub, BuilderConfig.from_env(ENV), session_checker=checker, transport=httpx.MockTransport(upstream)
+        hub, BuilderConfig.from_env(ENV), session_checker=checker, transport=httpx.MockTransport(upstream),
+        studio_template=STUDIO_TEMPLATE,
     )
     client = TestClient(app, base_url=ORIGIN, follow_redirects=False)
     return client, upstream, hub, seen_apps
@@ -613,6 +617,35 @@ def test_studio_csp_hashes_only_the_served_code(setup):
         expected = base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
         assert 'sha256-' + expected in csp
     assert 'unsafe-inline' not in csp and 'unsafe-eval' not in csp
+
+
+def test_workspace_html_cannot_supply_hub_origin_script(setup):
+    client, upstream, *_ = setup
+    owner(client)
+    malicious = STUDIO_HTML + '<script>window.stealHubSession()</script><style>body{display:none}</style>'
+    upstream.handler = lambda request: httpx.Response(200, headers={'content-type': 'text/html'}, text=malicious)
+    response = client.get('/builder/studio')
+    assert response.status_code == 200
+    assert 'stealHubSession' not in response.text
+    assert 'body{display:none}' not in response.text
+    upstream.handler = lambda request: httpx.Response(200, headers={'content-type': 'text/html'}, text='<script>window.stealHubSession()</script>')
+    assert client.get('/builder/studio').status_code == 502
+
+
+@pytest.mark.parametrize('path,method,cookie,expected', [
+    ('/builder/api/suite/action', 'POST', '', 401),
+    ('/builder/api/suite/action', 'POST', 'other', 403),
+    ('/builder/absent', 'POST', 'good', 404),
+    ('/builder/studio', 'POST', 'good', 405),
+    ('/builder/api/suite/action', 'POST', 'broken', 503),
+])
+def test_unread_body_refusals_close_connections(setup, path, method, cookie, expected):
+    client, *_ = setup
+    if cookie:
+        owner(client, cookie)
+    response = client.request(method, path, headers=write_headers(), content=b'{}')
+    assert response.status_code == expected
+    assert response.headers['connection'] == 'close'
 
 
 def test_studio_page_requires_html(setup):

@@ -880,17 +880,58 @@ def test_concurrent_rm_cancels_running_container_and_ps_does_not_fake(https_brid
     assert rm_rc2 == 1
 
 
-def test_unknown_container_rm_and_ps_rejected(https_bridge):
+def test_early_removal_prevents_late_container_start(https_bridge):
     env = {"BUILDER_HOST_CONFIG": str(https_bridge["client_cfg_path"])}
     unknown = "cog-verify-" + ("a" * 32)
-    for cmd in (
-        ["docker", "rm", "-f", unknown],
-        ["docker", "ps", "-aq", "--filter", f"name=^/{unknown}$"],
-    ):
+    out, err = io.BytesIO(), io.BytesIO()
+    assert cli_bridge.main(['docker', 'ps', '-aq', '--filter', f'name=^/{unknown}$'],
+                           environ=env, stdout_stream=out, stderr_stream=err) == 2
+    out, err = io.BytesIO(), io.BytesIO()
+    assert cli_bridge.main(['docker', 'rm', '-f', unknown], environ=env,
+                           stdout_stream=out, stderr_stream=err) == 0
+    candidate = https_bridge['workspace_root'] / 'late'; candidate.mkdir()
+    (candidate / 'probe.py').write_text('pass')
+    args = _canonical_docker_run_argv(container=unknown, candidate_dir=candidate, python_argv=['probe.py'])
+    out, err = io.BytesIO(), io.BytesIO()
+    assert cli_bridge.main(['docker', *args], environ=env, stdout_stream=out, stderr_stream=err) != 0
+    assert not any(row['argv'][1] == 'run' for row in https_bridge['runner'].calls)
+    assert {row['argv'][1] for row in https_bridge['runner'].calls} <= {'rm', 'ps'}
+
+
+def test_provider_and_verifier_use_separate_https_tokens(https_bridge, monkeypatch):
+    from dataclasses import replace
+    token = 'b' * 48
+    runner = _FakeRunner()
+    config = replace(https_bridge['config'], token=token, claude_cli=None)
+    service = HostBridgeService(config, runner=runner)
+    server = create_server(config, service=service)
+    thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': .05}, daemon=True)
+    thread.start()
+    path = https_bridge['client_cfg_path']
+    data = json.loads(path.read_text())
+    data.update(docker_url='https://127.0.0.1:' + str(server.server_port), docker_token=token)
+    path.write_text(json.dumps(data))
+    env = {'BUILDER_HOST_CONFIG': str(path)}
+    monkeypatch.setenv('HTTPS_PROXY', 'http://127.0.0.1:1')
+    monkeypatch.setenv('NO_PROXY', '')
+    try:
         out, err = io.BytesIO(), io.BytesIO()
-        rc = cli_bridge.main(cmd, environ=env, stdout_stream=out, stderr_stream=err)
-        assert rc == 2
-    assert https_bridge["runner"].calls == []
+        assert cli_bridge.main(['docker', 'image', 'inspect', '--format',
+                                '{{.Id}} {{.Os}} {{.Architecture}}', PINNED_IMAGE],
+                               environ=env, stdout_stream=out, stderr_stream=err) == 0
+        assert runner.calls and not https_bridge['runner'].calls
+        out, err = io.BytesIO(), io.BytesIO()
+        assert cli_bridge.main(['claude', '--version'], environ=env,
+                               stdout_stream=out, stderr_stream=err) == 0
+        assert https_bridge['runner'].calls
+        monkeypatch.delenv('HTTPS_PROXY')
+        status, _ = _https_request(data['docker_url'] + '/cli/claude', ca_file=https_bridge['cert'],
+                                   headers={'Authorization': 'Bearer ' + token,
+                                            'Content-Type': 'application/json'},
+                                   body=b'{"argv":["--version"]}')
+        assert status == 503
+    finally:
+        server.shutdown(); server.server_close(); thread.join()
 
 
 def test_docker_shim_rejects_symlinks_git_pixi_host_escape_and_oversize(https_bridge, tmp_path: Path):

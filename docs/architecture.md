@@ -30,10 +30,12 @@ installation, generic arbitrary package operations and publication remain
 disabled until their execution containment is proven. A safe preview must label
 unavailable actions clearly and must refuse them server-side.
 
-For the Gaming preview, a trusted Docker bridge on the private kind network
-exposes only native Claude's fixed tool-free command forms and the public
-verifier's fixed Docker policy. Vendor stores remain vendor-owned bind mounts
-in that bridge. Docker authority is absent from Studio. Verification containers
+For the Gaming preview, separate trusted provider and verifier containers on the
+private kind network expose native Claude's fixed tool-free commands and the
+public verifier's fixed Docker policy. Vendor stores remain vendor-owned bind
+mounts only in the provider. Docker authority is absent from Claude and Studio.
+The provider's store mounts are read-write for native refresh and include its
+existing vendor history. Verification containers
 have no network or credentials and use only read-only candidate/input mounts.
 The host bridge is deliberately trusted infrastructure, separate from generated
 execution. General Kubernetes-native multi-tenant verification is future work.

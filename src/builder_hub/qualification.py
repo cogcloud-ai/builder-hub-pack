@@ -49,7 +49,7 @@ def main():
             page = client.get('/builder/studio'); page.raise_for_status()
             assert '/builder/api/suite/action' in page.text
             assert 'unsafe-inline' not in page.headers['content-security-policy']
-            token = re.search(r"token='([a-zA-Z0-9_-]+)'", page.text).group(1)
+            token = re.search(r'<meta name="cog-workbench-token" content="([a-zA-Z0-9_-]+)">', page.text).group(1)
             report['studio_page'] = 200
             catalog = client.get('/builder/api/suite/catalog'); catalog.raise_for_status()
             bindings = catalog.json()['bindings']

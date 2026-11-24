@@ -1284,7 +1284,16 @@ class HostBridgeService:
             with self._lock:
                 record = self._containers.get(invocation.container)
             if record is None:
-                raise BridgeError(404, "unknown_container", "Container was not created by this bridge.")
+                # The native supervisor can time out while the Python shim is
+                # still starting. Register a cancellation tombstone so a late
+                # request with this identity cannot start after cleanup.
+                try:
+                    record = self._register_container(invocation.container)
+                except BridgeError as exc:
+                    if exc.code != 'duplicate_container':
+                        raise
+                    with self._lock:
+                        record = self._containers[invocation.container]
             # Signal any in-flight docker run immediately without blocking on it,
             # then invoke real docker rm -f / absence check on the host container.
             record.cancel_event.set()
@@ -1330,6 +1339,7 @@ class HostBridgeService:
                 "--name",
                 record.host_container,
                 *DOCKER_FIXED_RUN_POLICY_ARGS,
+                '--label', 'cogcloud.builder-verifier=true',
                 *mounts,
                 "--entrypoint",
                 "python",
@@ -1347,6 +1357,10 @@ class HostBridgeService:
             )
         finally:
             removed = self._remove_host_container(record.host_container)
+            for _ in range(2):
+                if removed:
+                    break
+                removed = self._remove_host_container(record.host_container)
             with self._lock:
                 if removed:
                     record.state = "removed"
@@ -1359,14 +1373,35 @@ class HostBridgeService:
             200,
             {
                 "ok": True,
-                "exit_code": result.exit_code,
+                "exit_code": result.exit_code if removed else 1,
                 "stdout": result.stdout.decode("utf-8", errors="replace"),
-                "stderr": result.stderr.decode("utf-8", errors="replace"),
-                "execution_status": result.execution_status,
+                "stderr": result.stderr.decode("utf-8", errors="replace") if removed else 'Verification container cleanup failed.',
+                "execution_status": result.execution_status if removed else 'cleanup-failed',
                 "elapsed_seconds": result.elapsed_seconds,
             },
             "run",
         )
+
+    def cleanup_abandoned(self) -> None:
+        """Recover only this bridge's labelled verification containers at startup."""
+        if self.config.verify_image is None:
+            return
+        result = self.runner([str(self.config.docker_cli), 'ps', '-aq', '--filter',
+                              'label=cogcloud.builder-verifier=true'], cwd=None,
+                             env=sanitize_docker_env(), stdin_bytes=b'', timeout_seconds=15,
+                             max_output_bytes=65536)
+        if result.exit_code != 0:
+            raise ValueError('Cannot inspect abandoned verifier containers.')
+        for ident in result.stdout.decode().split():
+            if not re.fullmatch(r'[a-f0-9]{12,64}', ident):
+                raise ValueError('Unexpected verifier container identity.')
+            if not self._remove_host_container(ident):
+                raise ValueError('Cannot remove an abandoned verifier container.')
+        if self.config.staging_root:
+            for path in self.config.staging_root.glob('builder-host-stage-*'):
+                if path.is_symlink() or not path.is_dir():
+                    raise ValueError('Unexpected staging path during startup cleanup.')
+                shutil.rmtree(path)
 
     def qualify(
         self,
@@ -1483,18 +1518,25 @@ class HostBridgeService:
                     "import os, socket\n"
                     "from pathlib import Path\n"
                     "assert os.getuid() == 65534\n"
+                    "assert Path('/sys/fs/cgroup/memory.max').read_text().strip() == '268435456'\n"
+                    "assert Path('/sys/fs/cgroup/pids.max').read_text().strip() == '64'\n"
+                    "quota, period = Path('/sys/fs/cgroup/cpu.max').read_text().split(); assert int(quota) == int(period)\n"
+                    "status = dict(line.split(':', 1) for line in Path('/proc/self/status').read_text().splitlines() if ':' in line)\n"
+                    "assert int(status['CapEff'].strip(), 16) == 0 and status['NoNewPrivs'].strip() == '1'\n"
+                    "assert not Path('/var/run/docker.sock').exists()\n"
+                    "assert not any(key.startswith(('BUILDER_', 'ANTHROPIC_', 'OPENROUTER_')) for key in os.environ)\n"
                     "try:\n"
                     "    Path('/candidate/mutated').write_text('no')\n"
                     "    raise AssertionError('candidate writable')\n"
                     "except OSError:\n"
                     "    pass\n"
                     "Path('/tmp/ok').write_text('ok')\n"
-                    "s = socket.socket(); s.settimeout(0.2)\n"
-                    "try:\n"
-                    "    s.connect(('1.1.1.1', 443))\n"
-                    "    raise AssertionError('network reachable')\n"
-                    "except OSError:\n"
-                    "    pass\n"
+                    "for address, port in [('1.1.1.1', 443), ('172.30.0.20', 9443), ('172.30.0.21', 9443)]:\n"
+                    "    with socket.socket() as s:\n"
+                    "        s.settimeout(0.2)\n"
+                    "        try: s.connect((address, port))\n"
+                    "        except OSError: pass\n"
+                    "        else: raise AssertionError('network reachable')\n"
                     "print('confined')\n"
                 )
                 try:
@@ -1761,6 +1803,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, indent=2))
         return 0 if report["ok"] else 1
 
+    try:
+        service.cleanup_abandoned()
+    except (ValueError, BridgeError):
+        print(json.dumps({'ok': False, 'error': 'Verifier startup cleanup failed.'}), file=sys.stderr)
+        return 2
     server = create_server(config, service=service, require_tls=True)
 
     def _shutdown_handler(_signum: int, _frame: Any) -> None:

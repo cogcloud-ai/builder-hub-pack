@@ -101,7 +101,7 @@ def initialize(workspace: Path):
 
         def package(self, request, envelope, destination):
             root = self.root(destination)
-            if root.parent != self.workspace or root.name in self.trusted_packages or not re.fullmatch(r'cog-[a-z0-9]+(?:-[a-z0-9]+)*', root.name):
+            if root.parent != self.workspace or root.name in self.trusted_packages | {'cog-op-builder'} or not re.fullmatch(r'cog-[a-z0-9]+(?:-[a-z0-9]+)*', root.name):
                 raise ValueError('New packages must be direct workspace children with a Cog name.')
             return super().package(request, envelope, destination)
 
@@ -227,29 +227,9 @@ class WorkspaceHandler(BaseHTTPRequestHandler):
         query = dict(urllib.parse.parse_qsl(parsed.query))
         try:
             if parsed.path == '/studio':
-                page = (self.server.workspace / 'cog-workbench/src/studio.html').read_text()
-                page = page.replace('__SUITE_TOKEN__', self.server.surface.TOKEN)
-                page = page.replace('<a href="/">Inspect a Cog →</a>', '<a href="/web/home">Back to Collab Hub →</a>')
-                qualified = execution_policy() is not None
-                availability = ('Generated-code verification uses a qualified isolated container with no network.'
-                                if qualified else 'Generated-code tests and automatic continuation are awaiting isolation qualification.')
-                note = ('<section class="card"><h2>Your private Builder workspace</h2>'
-                        '<p>Design, author and package Cogs. Saved builds and evidence stay in this workspace. '
-                        + availability + '</p>'
-                        '<button id="hostedSmoke">Run integration check</button>'
-                        '<p id="hostedResult" role="status"></p></section>')
-                page = page.replace('<main>', '<main>' + note)
-                policy = """
-const hostedBlocked = new Set(['gateway','cases',__BLOCKED_BUILD__]);
-function hostedControls(){for(const id of hostedBlocked){const e=$(id);if(e){e.disabled=true;e.title='Execution isolation qualification is pending.'}}for(const e of document.querySelectorAll('[data-check]'))if(e.dataset.check!=='check'){e.disabled=true;e.title='Execution isolation qualification is pending.'}}
-const originalControls=controls; controls=function(){originalControls();hostedControls()};
-const originalBuildControls=buildControls; buildControls=function(){originalBuildControls();hostedControls()};
-$('hostedSmoke').onclick=handle(async()=>{let value=await job({action:'smoke-fixture'});$('hostedResult').textContent='Integration check passed. Word totals '+value.outputs.first_tally.total_words+' and '+value.outputs.accumulated_tally.total_words+'. Evidence saved.'});
-hostedControls();
-"""
-                policy = policy.replace('__BLOCKED_BUILD__', '' if qualified else "'acceptBuild','resumeBuild'")
-                policy += "\n$('model').value='sonnet'; $('upstream').closest('label')?.remove();\n"
-                page = page.replace('</script>', policy + '</script>')
+                from .studio import render
+                template = (self.server.workspace / 'cog-workbench/src/studio.html').read_text()
+                page = render(template, self.server.surface.TOKEN, execution_policy() is not None)
                 return self._send(200, page.encode(), 'text/html; charset=utf-8')
             suite = self.server.suite_type()
             if parsed.path.endswith('/catalog'):
@@ -271,7 +251,8 @@ hostedControls();
             return self._send(401, {'error': 'authentication required'})
         if self.path != '/api/suite/action':
             return self._send(404, {'error': 'not found'})
-        if self.headers.get('X-Cog-Workbench') != self.server.surface.TOKEN:
+        page_tokens = self.headers.get_all('X-Cog-Workbench', [])
+        if len(page_tokens) != 1 or not hmac.compare_digest(page_tokens[0].encode(), self.server.surface.TOKEN.encode()):
             return self._send(403, {'error': 'Reload Studio before submitting.'})
         try:
             if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length', [])) != 1:

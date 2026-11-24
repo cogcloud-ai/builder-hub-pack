@@ -60,7 +60,7 @@ DEFAULT_CA_FILE = "/etc/builder-host/ca.crt"
 DEFAULT_WORKSPACE_ROOT = "/opt/builder-suite"
 MAX_RESPONSE_JSON_BYTES = 5 * 1024 * 1024
 
-ALLOWED_CLIENT_CONFIG_KEYS = frozenset({"url", "token", "ca_file", "workspace_root"})
+ALLOWED_CLIENT_CONFIG_KEYS = frozenset({"url", "token", "ca_file", "workspace_root", "docker_url", "docker_token"})
 
 EXPECTED_DOCKER_RUN_FLAGS = frozenset({"--read-only"})
 EXPECTED_DOCKER_RUN_VALUE_FLAGS: dict[str, str] = {
@@ -91,6 +91,8 @@ class ClientConfig:
     token: str
     ca_file: Path | None
     workspace_root: Path
+    docker_url: str | None = None
+    docker_token: str | None = None
 
 
 def _validate_bridge_url(raw_url: Any) -> str:
@@ -152,12 +154,16 @@ def load_client_config(environ: Mapping[str, str] | None = None) -> ClientConfig
 
     if not isinstance(raw_workspace_root, str) or not Path(raw_workspace_root).is_absolute():
         raise CliBridgeError("workspace_root must be an absolute path.")
+    if bool(file_data.get('docker_url')) != bool(file_data.get('docker_token')):
+        raise CliBridgeError('The separate verifier URL and token must be configured together.')
 
     return ClientConfig(
         url=url,
         token=token,
         ca_file=ca_file,
         workspace_root=Path(raw_workspace_root),
+        docker_url=_validate_bridge_url(file_data['docker_url']) if file_data.get('docker_url') else None,
+        docker_token=validate_token(file_data['docker_token']) if file_data.get('docker_token') else None,
     )
 
 
@@ -195,19 +201,21 @@ def post_bridge(
     if endpoint not in ("/cli/claude", "/cli/docker"):
         raise CliBridgeError("Unsupported bridge endpoint.")
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    url = config.docker_url if endpoint == '/cli/docker' and config.docker_url else config.url
+    token = config.docker_token if endpoint == '/cli/docker' and config.docker_token else config.token
     req = urllib.request.Request(
-        config.url + endpoint,
+        url + endpoint,
         data=body,
         headers={
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "Authorization": f"Bearer {config.token}",
+            "Authorization": f"Bearer {token}",
         },
         method="POST",
     )
 
-    handlers: list[urllib.request.BaseHandler] = [_NoRedirectHandler()]
-    if config.url.startswith("https://"):
+    handlers: list[urllib.request.BaseHandler] = [_NoRedirectHandler(), urllib.request.ProxyHandler({})]
+    if url.startswith("https://"):
         ssl_ctx = ssl.create_default_context(
             cafile=str(config.ca_file) if config.ca_file is not None else None
         )

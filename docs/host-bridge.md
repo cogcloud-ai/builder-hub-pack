@@ -15,18 +15,22 @@ or the Docker socket:
 
 ## Deployment topology
 
-The bridge runs as a dedicated trusted container on the existing kind Docker
-network (for example, static private IP `172.30.0.20`, HTTPS port `9443`).
-Only the bridge container receives:
+Two separate trusted containers run on the existing kind Docker network:
 
-- Read-only bind mounts of the fixed native `claude` executable and
-  vendor-owned subscription config files (never copied into Kubernetes or
-  Studio).
-- The host Docker CLI and Docker socket.
-- A dedicated staging directory mounted at the **identical absolute path** on
+- `builder-claude-service` at `172.30.0.20:9443` receives the native Claude
+  executable read-only and its vendor-owned `~/.claude` and `~/.claude.json`
+  stores read-write, as required for native token refresh. This includes vendor
+  session/configuration history; it remains confined to the private provider
+  service. It receives no Docker socket, Docker group or verifier credential.
+- `builder-verify-service` at `172.30.0.21:9443` receives the real Docker CLI and
+  socket, and no vendor store or Claude credential. It gets a dedicated staging
+  directory mounted at the **identical absolute path** on
   the host and inside the bridge container, configured via
   `BUILDER_STAGING_ROOT`, so host Docker can resolve bind-mount sources staged
   by the bridge.
+
+The two services have distinct internal tokens and private secret directories.
+The model subprocess cannot read the verifier's Docker socket or secrets.
 
 Inside the Kubernetes workspace pod, thin executable wrappers at
 `/usr/local/bin/claude` and `/usr/local/bin/docker` invoke:
@@ -133,7 +137,8 @@ parses only the exact invocations emitted by public
      output (`<= 2 MiB`), and always removes both container and staging
      directory in `finally`.
 3. `docker rm -f cog-verify-<32hex>`
-   - Allowed only for container names created by this bridge instance.
+   - Creates a cancellation tombstone if the native supervisor timed out before
+     the request reached the bridge. A late run with that identity is refused.
    - Signals the running `run` operation concurrently without serializing behind
      the run lock, kills/removes the bridge-owned host container, and verifies
      actual absence via a real filtered `docker ps` query before returning `0`
@@ -173,6 +178,8 @@ default:
 {
   "url": "https://172.30.0.20:9443",
   "token": "<at-least-32-character-internal-token>",
+  "docker_url": "https://172.30.0.21:9443",
+  "docker_token": "<distinct-verifier-token>",
   "ca_file": "/etc/builder-host/ca.crt",
   "workspace_root": "/opt/builder-suite"
 }

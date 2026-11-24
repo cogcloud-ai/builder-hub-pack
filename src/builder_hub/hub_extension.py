@@ -35,6 +35,7 @@ import ipaddress
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import ssl
 from collections.abc import Awaitable, Callable, Mapping
@@ -245,6 +246,8 @@ def _header(scope: Scope, name: bytes) -> str | None:
 
 
 def _host_matches(value: str | None, origin: Origin) -> bool:
+    if not value or value.endswith(':') or any(ord(char) <= 32 or ord(char) >= 127 or char in '/?#@\\' for char in value):
+        return False
     if not value:
         return False
     try:
@@ -275,11 +278,13 @@ class BuilderHubExtension:
         session_checker: SessionChecker = hub_session_checker,
         transport: httpx.AsyncBaseTransport | None = None,
         ssl_context: ssl.SSLContext | None = None,
+        studio_template: str | None = None,
     ) -> None:
         self.hub_app = hub_app
         self.config = config
         self.session_checker = session_checker
         self.transport = transport
+        self.studio_template = studio_template
         if transport is None and config.workspace_origin.scheme == "https" and ssl_context is None:
             ssl_context = workspace_ssl_context(os.environ)
         self.ssl_context = ssl_context
@@ -447,7 +452,7 @@ class BuilderHubExtension:
                     content_type = response.headers.get("content-type", "")
                     encoding = response.headers.get("content-encoding", "identity").lower()
                     declared = response.headers.get("content-length")
-                    if declared is not None and (not declared.isdigit() or int(declared) > MAX_RESPONSE_BODY):
+                    if declared is not None and (not declared.isascii() or not declared.isdigit() or int(declared) > MAX_RESPONSE_BODY):
                         raise _Refusal(502, "bad-gateway")
                     if encoding not in ("", "identity"):
                         # Refused before reading, so nothing is ever decompressed.
@@ -482,6 +487,16 @@ class BuilderHubExtension:
                 html = bytes(payload).decode("utf-8")
             except UnicodeDecodeError as exc:
                 raise _Refusal(502, "bad-gateway") from exc
+            from .studio import metadata, render
+            if self.studio_template is None:
+                raise _Refusal(503, 'trusted-studio-unavailable')
+            try:
+                token, qualified = metadata(html)
+                # Workspace HTML is never trusted as executable Hub-origin
+                # content. Rebuild exclusively from this image's own assets.
+                html = render(self.studio_template, token, qualified)
+            except ValueError as exc:
+                raise _Refusal(502, 'bad-workspace-metadata') from exc
             html = rewrite_studio_html(html)
             out = html.encode("utf-8")
             return (
@@ -500,12 +515,11 @@ class BuilderHubExtension:
     def _error(
         self, status: int, error: str, *, page: bool, extra: Mapping[str, str] | None = None
     ) -> tuple[int, dict[str, str], bytes]:
-        headers = {**SECURITY_HEADERS, "content-security-policy": API_CSP, **(extra or {})}
+        headers = {**SECURITY_HEADERS, "content-security-policy": API_CSP, 'connection': 'close', **(extra or {})}
         if status in (303,):
             return status, headers, b""
         headers["content-type"] = "application/json"
-        if status in (400, 413, 414, 415):
-            headers["connection"] = "close"
+        headers["connection"] = "close"
         return status, headers, json.dumps({"error": error}).encode()
 
 
@@ -547,7 +561,7 @@ def install_navigation(home_module, owner_sub: str) -> None:
 
     def chrome(surface, session, root_path, back_path):
         result = original(surface, session, root_path, back_path)
-        if session is not None and session.user == owner_sub:
+        if session is not None and isinstance(session.user, str) and hmac.compare_digest(session.user.encode(), owner_sub.encode()):
             result = replace(result, nav=result.nav +
                              '<a href="' + result.root + '/builder/studio">Builder Studio</a>')
         return result
@@ -564,7 +578,7 @@ async def _refuse_body(scope: Scope) -> None:
 async def _read_body(scope: Scope, receive: Receive) -> bytes:
     length = _header(scope, b"content-length")
     if length is not None:
-        if not length.isdigit():
+        if not length.isascii() or not length.isdigit():
             raise _Refusal(400, "bad-request")
         if int(length) > MAX_REQUEST_BODY:
             raise _Refusal(413, "too-large")
@@ -606,7 +620,8 @@ def main() -> None:  # pragma: no cover - exercised in deployment
     hub = make_app(config)
     if getattr(hub.state, "web_surface", None) is None:
         raise SystemExit("Builder requires the Hub web surface (web.enabled) for session checks")
-    app = BuilderHubExtension(hub, builder_config, ssl_context=ssl_context)
+    template = Path('/opt/builder-suite/cog-workbench/src/studio.html').read_text()
+    app = BuilderHubExtension(hub, builder_config, ssl_context=ssl_context, studio_template=template)
     uvicorn.run(
         app,
         host=config.server.hostname,

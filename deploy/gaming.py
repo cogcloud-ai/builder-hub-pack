@@ -44,10 +44,14 @@ def secret():
                               capture_output=True, text=True)
     if response.returncode == 0:
         stored = json.loads(response.stdout)['data']
-        return {name: base64.b64decode(value).decode() for name, value in stored.items()}
+        values = {name: base64.b64decode(value).decode() for name, value in stored.items()}
+        if 'docker-token' not in values:
+            values['docker-token'] = secrets.token_urlsafe(48)
+            apply('Secret', 'builder-preview-channel', stringData=values)
+        return values
     if 'NotFound' not in response.stderr:
         raise RuntimeError('Cannot read preview channel secret.')
-    values = {name: secrets.token_urlsafe(48) for name in ('workspace-token', 'host-token')}
+    values = {name: secrets.token_urlsafe(48) for name in ('workspace-token', 'host-token', 'docker-token')}
     apply('Secret', 'builder-preview-channel', stringData=values)
     return values
 
@@ -79,6 +83,7 @@ def main():
     parser.add_argument('--image', required=True)
     parser.add_argument('--username', default='trent')
     parser.add_argument('--host-address', default='172.30.0.20')
+    parser.add_argument('--verify-host-address', default='172.30.0.21')
     args = parser.parse_args()
     if not os.environ.get('KUBECONFIG'):
         parser.error('Set KUBECONFIG to the intended private test cluster.')
@@ -93,15 +98,18 @@ def main():
     channel = secret()
     client = {'url': 'https://' + args.host_address + ':9443',
               'token': channel['host-token'], 'ca_file': '/etc/builder-host/ca.crt',
+              'docker_url': 'https://' + args.verify_host_address + ':9443',
+              'docker_token': channel['docker-token'],
               'workspace_root': '/opt/builder-suite'}
     apply('Secret', 'builder-host-client', stringData={'client.json': json.dumps(client), 'ca.crt': ca})
     for name, dns, ip in [('builder-workspace-tls', ['builder-workspace.collab-builder.svc'], []),
-                           ('builder-host-tls', ['builder-host'], [args.host_address])]:
+                           ('builder-host-tls', ['builder-host'], [args.host_address]),
+                           ('builder-verify-tls', ['builder-verify'], [args.verify_host_address])]:
         apply('Certificate', name, {'secretName': name, 'issuerRef': {'kind': 'ClusterIssuer', 'name': 'builder-ca'},
                                     'dnsNames': dns, **({'ipAddresses': ip} if ip else {}),
                                     'privateKey': {'algorithm': 'ECDSA', 'size': 256}})
     run('kubectl', '-n', NAMESPACE, 'wait', '--for=condition=Ready', 'certificate/builder-workspace-tls',
-        'certificate/builder-host-tls', '--timeout=120s')
+        'certificate/builder-host-tls', 'certificate/builder-verify-tls', '--timeout=120s')
     apply('PersistentVolumeClaim', 'builder-workspace', {'accessModes': ['ReadWriteOnce'],
                                                        'resources': {'requests': {'storage': '12Gi'}}})
     apply('Service', 'builder-workspace', {'selector': {'app': 'builder-workspace'},
@@ -126,6 +134,7 @@ def main():
                'securityContext': security,
                'ports': [{'name': 'https', 'containerPort': 8443}],
                'env': [{'name': 'BUILDER_WORKSPACE_TOKEN_FILE', 'value': '/etc/builder-channel/token'},
+                       {'name': 'PYTHONDONTWRITEBYTECODE', 'value': '1'},
                        {'name': 'BUILDER_TLS_CERT', 'value': '/etc/builder-tls/tls.crt'},
                        {'name': 'BUILDER_TLS_KEY', 'value': '/etc/builder-tls/tls.key'},
                        {'name': 'HOME', 'value': '/tmp/builder-home'},

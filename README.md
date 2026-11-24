@@ -24,8 +24,9 @@ explicit image refresh preserves runtime state; owner/source changes require
 migration. Runtime environment installation and arbitrary Workbench filesystem
 or process endpoints are unavailable.
 
-A separate restricted HTTPS bridge uses the native Claude subscription login
-in its vendor-owned store. Only that trusted bridge receives Docker authority.
+A restricted HTTPS provider bridge uses the native Claude subscription login
+in its vendor-owned store. A separate verifier bridge receives Docker authority;
+the Claude subprocess has no Docker socket or verifier credentials.
 The current provider selector is Claude `sonnet`; native provenance retains the
 reported model and CLI version. An alias does not attest immutable weights.
 
@@ -75,10 +76,12 @@ Use its resulting local `sha256:` identity below.
 ```sh
 python3 deploy/host.py --image "$STUDIO_IMAGE_DIGEST" \
   --verify-image "$VERIFY_IMAGE_ID" --directory "$HOST_RUNTIME_DIRECTORY"
-docker exec builder-host-services python -m builder_hub.host_bridge qualify \
-  --require-claude --require-docker --probe-docker
+docker exec builder-claude-service python -m builder_hub.host_bridge qualify \
+  --require-claude
+docker exec builder-verify-service python -m builder_hub.host_bridge qualify \
+  --require-docker --probe-docker
 kubectl -n collab-builder exec deployment/builder-workspace -- \
-  /opt/builder-suite/cog-workbench/.pixi/envs/default/bin/python -m builder_hub.admit
+  python -m builder_hub.admit
 ```
 
 The bridge uses only the private kind Docker network. Credential and certificate
