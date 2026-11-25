@@ -1,0 +1,117 @@
+"""Populate one persistent owner workspace from the immutable suite image."""
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+from .trust import INVENTORY, checksum, verify, RUNTIME_DIRECTORIES, RUNTIME_FILES
+
+
+def restore_task_caches(source, destination, trusted_files):
+    """Discard mutable Pixi scheduling records and restore the image's copies.
+
+    Native model tasks create these JSON records even without cached outputs.
+    They must not become trusted persistent execution inputs. Keep the complete
+    inventory check: normalize only this disposable cache from immutable source.
+    """
+    packages = {name.split('/', 1)[0] for name in trusted_files}
+    caches = {name + '/.pixi/task-cache-v0' for name in packages}
+    for name in trusted_files:
+        prefix, separator, _ = name.partition('/.pixi/task-cache-v0/')
+        if separator:
+            caches.add(prefix + '/.pixi/task-cache-v0')
+    for relative in sorted(caches):
+        original, target = source / relative, destination / relative
+        parent = destination
+        for part in Path(relative).parts:
+            parent = parent / part
+            if parent.is_symlink():
+                raise ValueError('Pixi task cache paths must not contain symlinks.')
+        if target.exists():
+            if not target.is_dir():
+                raise ValueError('Pixi task caches must be directories.')
+            shutil.rmtree(target)
+        if original.exists():
+            if original.is_symlink() or not original.is_dir():
+                raise ValueError('Immutable Pixi task cache must be a real directory.')
+            shutil.copytree(original, target, symlinks=True)
+
+
+def initialize(source, destination, owner, sources=None, trusted_files=None, refresh=False):
+    source, destination = Path(source), Path(destination)
+    if not owner:
+        raise ValueError('An explicit workspace owner is required.')
+    expected = {'owner_sha256': hashlib.sha256(owner.encode()).hexdigest(),
+                'sources': sources if sources is not None else json.loads(Path('/opt/builder-hub/sources.json').read_text())}
+    marker = destination / '.builder-owner.json'
+    pending = destination / '.builder-initializing.json'
+    if trusted_files is None and INVENTORY.is_file():
+        trusted_files = json.loads(INVENTORY.read_text())
+    expected_tree = checksum(trusted_files) if trusted_files is not None else None
+    needs_copy = not marker.exists()
+    if marker.exists():
+        if marker.is_symlink():
+            raise ValueError('Workspace owner marker must not be a symlink.')
+        previous = json.loads(marker.read_text())
+        if {key: previous.get(key) for key in expected} != expected:
+            raise ValueError('Workspace owner or source pins differ; explicit migration is required.')
+        if trusted_files is not None:
+            if previous.get('suite_tree_sha256') not in (None, expected_tree):
+                if not refresh:
+                    raise ValueError('Execution image changed; use an explicit trusted-source refresh.')
+                needs_copy = True
+            # The final verification below also covers adopting the first
+            # preview marker, and runs before the new inventory is recorded.
+    else:
+        if pending.exists():
+            if pending.is_symlink() or json.loads(pending.read_text()) != expected:
+                raise ValueError('Incomplete initialization belongs to another owner or revision.')
+        elif any(row.name != 'lost+found' for row in destination.iterdir()):
+            raise ValueError('Refusing to adopt a nonempty unmarked workspace.')
+        else:
+            pending.write_text(json.dumps(expected) + '\n')
+            pending.chmod(0o600)
+    if needs_copy:
+        # The PVC root is owned by the provisioner. Copy children without
+        # trying to chmod that root to match the image's directory metadata.
+        for child in source.iterdir():
+            target = destination / child.name
+            if target.is_symlink():
+                raise ValueError('Trusted package targets must not be symlinks.')
+            if child.is_dir() and not child.is_symlink():
+                if target.exists():
+                    # Preserve only declared runtime state on an explicit image
+                    # refresh. Source and environments are replaced together.
+                    for existing in target.iterdir():
+                        if existing.name in RUNTIME_DIRECTORIES | RUNTIME_FILES:
+                            if existing.is_symlink():
+                                raise ValueError('Preserved runtime state must not be a symlink.')
+                            continue
+                        if existing.is_dir() and not existing.is_symlink():
+                            shutil.rmtree(existing)
+                        else:
+                            existing.unlink()
+                shutil.copytree(child, target, dirs_exist_ok=True, symlinks=True,
+                                ignore=lambda folder, names: RUNTIME_DIRECTORIES | RUNTIME_FILES
+                                if Path(folder) == child else ())
+            else:
+                shutil.copy2(child, target, follow_symlinks=False)
+    if trusted_files is not None:
+        restore_task_caches(source, destination, trusted_files)
+        verify(destination, trusted_files)
+        expected['suite_tree_sha256'] = expected_tree
+    marker.write_text(json.dumps(expected, indent=2) + '\n')
+    marker.chmod(0o600)
+    pending.unlink(missing_ok=True)
+    for relative in ('cog-workbench/var', 'cog-workbench/var/suite', 'op-cog-builder/cycles'):
+        folder = destination / relative
+        if folder.is_symlink():
+            raise ValueError('Workspace state must use real directories.')
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        folder.chmod(0o700)
+
+
+if __name__ == '__main__':
+    os.umask(0o077)
+    initialize('/opt/builder-suite', '/workspace', os.environ.get('BUILDER_OWNER_SUB', ''),
+               refresh=os.environ.get('BUILDER_REFRESH_TRUSTED') == 'true')

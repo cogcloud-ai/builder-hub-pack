@@ -1,0 +1,112 @@
+{
+  "schema": "builder-hub-preview-qualification/1",
+  "verified_at": "2026-11-24T06:22:26Z",
+  "status": "PASS",
+  "scope": "Private single-owner Gaming preview; not multi-tenant qualification or human release approval",
+  "studio_path": "/builder/studio",
+  "source": {
+    "repository": "https://github.com/cogcloud-ai/builder-hub-pack",
+    "revision": "48f968ed265cc24bd563071193fd05062a176f9f",
+    "pr": "https://github.com/cogcloud-ai/builder-hub-pack/pull/1",
+    "foundation_revision": "3ac1e6a39685420c3dc96293b927c55f19c549b6"
+  },
+  "images": {
+    "integration": "collab-builder/studio-48f968e@sha256:8275273e461634c25826a7244de84d72cf2a797e3cb69b093c516c9cf3b488a9",
+    "integration_config": "sha256:8e43f9718cf295146d0bd13079ecc3f124f64e4e5651119ef58a039690d97f5c",
+    "foundation": "sha256:7f085a0c8e5e7567641a530bcb78be1ab32fa4c6c174efbab3ab53bc0511b811",
+    "verification": "sha256:c829f1c8e4f349648ed78d46bef72ec48ed588fcd2a77dceef2479c8358db135",
+    "node_runtime_source_revision_verified": true
+  },
+  "implemented_by": [
+    "Codex GPT-6.1-Sol",
+    "Claude Opus 5.5 (claude-opus-5-5)",
+    "Gemini 4 Neon (gemini-4-neon)"
+  ],
+  "provider": {
+    "auth": "Existing native Claude subscription on Gaming",
+    "model_selector": "sonnet",
+    "reported_model_usage": "claude-sonnet-5-5",
+    "immutable_model_identity_verified": false,
+    "cli_version": "2.1.330",
+    "admission_after_restart": "Existing provider admission remained valid after integrity verification."
+  },
+  "validation": {
+    "unit_tests_passed": 190,
+    "ci_current_head": "PASS (both runs)",
+    "rendered_javascript_syntax": "PASS (qualified/unqualified)",
+    "fresh_public_workspace_strict_check": "PASS",
+    "native_docker_isolation_tests_passed": 6,
+    "provider_bridge_qualification": "PASS",
+    "verifier_confinement_probe": "PASS",
+    "native_timeout_cleanup": "PASS",
+    "native_concurrent_cancel_cleanup": "PASS",
+    "active_leftover_verifier_containers": 0,
+    "user_confirmed_regular_chrome_studio_load": true,
+    "http_after_restart": {
+      "anonymous_page": 303,
+      "anonymous_api": 401,
+      "other_subject": 403,
+      "owner_studio": 200,
+      "foreign_origin": 403,
+      "revoked_session": 401,
+      "model_free_fixture_totals": [
+        21,
+        31
+      ]
+    },
+    "deployments": {
+      "workspace": "1/1",
+      "hub_api": "1/1",
+      "run_controller": "1/1"
+    }
+  },
+  "completed_build": {
+    "id": "20261124T060419Z-2131b4aa",
+    "started_at_revision": "3aff95df4ca4388b46ec24ad2ba9c0dda1d2d401",
+    "retained_at_revision": "48f968ed265cc24bd563071193fd05062a176f9f",
+    "status": "completed",
+    "rounds": 1,
+    "model_units_reserved": 5,
+    "model_unit_budget": 12,
+    "generated_tests_passed": 18,
+    "isolated_execution_records": 8,
+    "evaluator": "pass",
+    "criteria_passed": 4,
+    "automated_gate_decisions": "Explicit synthetic integration fixture acceptance, not human review or release acceptance",
+    "unchanged_files_after_restart": 52,
+    "artifact_hash_manifest_sha256": "d84a5c4de37db10bbad7526101d5c3c26a7cff5df528a46a7558008adbe54594"
+  },
+  "earlier_build": {
+    "id": "20261124T055731Z-76bc5de2",
+    "status": "budget-exhausted",
+    "reason": "Evaluator withheld acceptance: absence-of-effects criterion lacked instrumented evidence despite passing generated tests. Second fixture specified four functional criteria; isolation independently qualified. No evaluator or containment bypass."
+  },
+  "restart_fix": {
+    "reason": "Native Pixi task-cache JSON records changed the complete persistent inventory after live model turns",
+    "behavior": "Restore only disposable task-cache records from immutable image before unchanged full inventory verification. Preserve native state and reject source/environment tampering.",
+    "reviewer": "Claude Opus 5.5",
+    "head": "48f968ed265cc24bd563071193fd05062a176f9f",
+    "base": "3aff95df4ca4388b46ec24ad2ba9c0dda1d2d401",
+    "verdict": "PASS scoped delta; static public-source review"
+  },
+  "reviews": {
+    "summary": "https://github.com/cogcloud-ai/builder-hub-pack/pull/1#issuecomment-7123588028",
+    "historical_components_head": "3aff95df4ca4388b46ec24ad2ba9c0dda1d2d401",
+    "historical_components_base": "4fdc9203a75af6e770d6dc272008145a2cc24d62",
+    "claude": "PASS bridge/Codex scope; excludes own Hub/Studio components; 187 archived tests",
+    "gemini": "PASS Hub/workspace/Studio/deployment scope; excludes own bridge; static public-source only",
+    "whole_repository_single_family_independent_pass": false,
+    "human_merge_decision": "pending",
+    "prs": "draft and unmerged"
+  },
+  "limitations": [
+    "Single owner only; kind CNI does not enforce NetworkPolicy",
+    "Vendor/Docker infrastructure trusted; provider vendor-store mounts are read-write and include history",
+    "Abandoned Claude turns may continue until host timeout; concurrency resource-bounded",
+    "Original older development workspace scan reported CA lock warnings; fresh pinned public workspace strict verification passed",
+    "Shipped operator --live-build default brief remains broad and can correctly end with insufficient evidence; successful fixture used an explicitly functional brief"
+  ],
+  "record_type": "Sanitized historical operator summary; not raw logs, current health, or fresh-install qualification.",
+  "successful_functional_brief": "Build one code Cog for a functional integration fixture. Input bundle has a texts array of strings. Return payload with total_characters equal to the sum of Python len(text) for every string, including whitespace. Empty array gives zero. Acceptance criteria: empty array returns zero; Unicode counts Python code points; multiple texts include whitespace and empty strings; malformed inputs return error problems. Include stdlib unit tests for these four criteria. Network and effect isolation are qualified separately by the deployment tests; do not add an unmeasurable universal absence-of-effects criterion to this functional contract. No external dependencies.",
+  "retention_comparison_method": "SHA-256 every regular file below the completed cycle directory before and after workspace restart; compare maps of workspace-relative paths to digest. Raw maps and cycle contents are not included."
+}

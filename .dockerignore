@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!sources.json
+!src
+!src/**
+**/__pycache__
+**/*.pyc

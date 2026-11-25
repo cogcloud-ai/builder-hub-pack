@@ -18,10 +18,24 @@ non-Builder request unchanged. No Hub signing secret enters the workspace.
 The workspace service reuses public Studio and Suite code. Persistent storage
 holds workspace state and artifacts. An internal service credential protects
 access even where the test cluster does not enforce NetworkPolicy. Internal
-TLS is preferred and certificate validation must never be disabled.
+TLS and certificate validation are required. Trusted source and installed
+environments are inventoried in the image and verified before executing PVC
+code. The initializer can refresh an explicitly changed image while retaining
+state, cycles, candidates and composition records; a changed owner or suite pin
+requires a separate migration.
 
 First qualify browsing, saved progress and trusted model-free fixture operations.
 Model provider admission is explicit. Generated package tests, environment
 installation, generic arbitrary package operations and publication remain
 disabled until their execution containment is proven. A safe preview must label
 unavailable actions clearly and must refuse them server-side.
+
+For the Gaming preview, separate trusted provider and verifier containers on the
+private kind network expose native Claude's fixed tool-free commands and the
+public verifier's fixed Docker policy. Vendor stores remain vendor-owned bind
+mounts only in the provider. Docker authority is absent from Claude and Studio.
+The provider's store mounts are read-write for native refresh and include its
+existing vendor history. Verification containers
+have no network or credentials and use only read-only candidate/input mounts.
+The host bridge is deliberately trusted infrastructure, separate from generated
+execution. General Kubernetes-native multi-tenant verification is future work.
