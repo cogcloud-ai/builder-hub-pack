@@ -79,3 +79,50 @@ admission scheduler; a native CLI turn can continue until its host timeout after
 a client disappears. No multi-tenant or immutable-model attestation is claimed.
 Subsequent exact-commit review and live qualification remain required before
 calling these dispositions a PASS. Human merge decision remains pending.
+
+## Round 3 — complementary component reviews
+
+Head: 3aff95df4ca4388b46ec24ad2ba9c0dda1d2d401.
+Compared base: 4fdc9203a75af6e770d6dc272008145a2cc24d62.
+Publication: 2026-11-24 UTC; Claude's report is dated 2026-11-23 local.
+The [published summary](https://github.com/cogcloud-ai/builder-hub-pack/pull/1#issuecomment-7123588028)
+preserves the evidence and exclusions.
+
+- Claude Opus 5.5 (claude-opus-5-5): PASS for the Gemini bridge and Codex
+  integration. Excluded its own Hub proxy and the Studio render changes.
+  Verified archived imports and ran 187 tests. No live Docker, Kubernetes or
+  model calls by this reviewer.
+- Gemini 4 Neon (gemini-4-neon): PASS for the Claude/Codex Hub, Studio,
+  workspace and deployment boundary. Excluded its own host/CLI bridge and
+  bridge tests. Read exact public GitHub source and pinned upstream; static
+  review only, with no executed tests or live deployment/model calls.
+
+A prior Gemini filesystem recheck was BLOCKED by its workspace hook and issued
+no verdict. The successful public-source review respected that restriction.
+These are complementary scoped reviews, not a whole-repository independent PASS
+by one family or a human review.
+
+## Round 4 — persistent task-cache restart fix
+
+Reviewer: Claude Opus 5.5 (claude-opus-5-5), 2026-11-24.
+Head: 48f968ed265cc24bd563071193fd05062a176f9f.
+Base: 3aff95df4ca4388b46ec24ad2ba9c0dda1d2d401.
+Implemented by Codex GPT-6.1-Sol, from the coordinating session evidence.
+Verdict: PASS for this delta only; no blocking or major finding.
+
+Static public-source review covered initialize.py, its tests and README, with
+trust/entrypoint/admission interactions inspected. The reviewer did not execute
+tests, build or deploy; the coordinator's 190-test result is separate. The fix
+restores disposable Pixi task records from immutable source before the unchanged
+complete inventory check. It preserves runtime evidence and refuses source or
+environment tampering. Nits: missing nested-cache/file-target/no-image-cache
+fixtures; task scheduling caches remain mutable during a running session.
+Earlier component reviews were not re-executed by this reviewer.
+
+## Documentation handoff
+
+The subsequent developer handoff and sanitized historical qualification summary
+are authored by Codex GPT-6.1-Sol. They change no runtime code. Earlier model
+verdicts and deployment evidence remain tied to the exact SHAs above, not to a
+later documentation head. No new independent review is claimed for the handoff.
+Human merge decision remains pending.

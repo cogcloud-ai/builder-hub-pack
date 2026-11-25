@@ -4,6 +4,11 @@ Private, persistent Cog Builder Studio workspaces integrated with Collab Hub.
 Open `/builder/studio` on the Hub origin and sign in normally. The initial
 deployment is a single-owner preview on the Gaming test cluster.
 
+Start with the [developer handoff and deployment reference](docs/developer-handoff.md)
+to continue the Nebari-pack work without access to the original machines or
+conversation. It includes public pins, example configuration, manual qualification
+steps, historical evidence and the remaining installation issues.
+
 The public Cog suite owns Studio, provider admission, design, authoring, native
 Op sequencing, contract/candidate Gates, verification and evidence. This repo
 owns their hosted boundary and deployment. Exact public revisions are recorded
